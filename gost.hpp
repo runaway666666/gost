@@ -27,59 +27,26 @@
 #define GOST_DEBUG_DUMP(label, data) ((void)0)
 #endif
 
-// ========== Attribute Macros ==========
-#if defined(__GNUC__) || defined(__clang__)
-#define __attr_nodiscard __attribute__((warn_unused_result))
-#define __attr_malloc __attribute__((malloc))
-#define __attr_hot __attribute__((hot))
-#define __attr_cold __attribute__((cold))
-#define likely(x) __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
-#else
-#define __attr_nodiscard
-#define __attr_malloc
-#define __attr_hot
-#define __attr_cold
-#define likely(x) (x)
-#define unlikely(x) (x)
-#endif
-
-#ifdef __cplusplus
-#define __restrict__ __restrict
-#define __noexcept noexcept
-#define __const_noexcept noexcept
-#else
-#define __restrict__ restrict
-#define __noexcept
-#define __const_noexcept
-#endif
-
-/**
- * @brief Enum for supported key sizes (in bytes).
- */
 enum class GOST_KEY_SIZE : size_t
 {
     BITS_256 = 32
 };
 
-/** @brief Block cipher modes. */
 struct GOST_ECB_Mode {};
 struct GOST_CBC_Mode {};
 struct GOST_CFB_Mode {};
 struct GOST_OFB_Mode {};
 struct GOST_CTR_Mode {};
 
-// ===================== Internal error handling =====================
 namespace gost_detail
 {
-[[noreturn]] __attr_cold inline void fail(const char *msg)
+[[noreturn]] inline void fail(const char *msg)
 {
     GOST_DEBUG_LOG(std::string("Exception: ") + msg);
     throw std::runtime_error(msg);
 }
-} // namespace gost_detail
+}
 
-// ========== Utility namespace for hex, base64, binary ==========
 namespace gost_util
 {
 static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -101,8 +68,10 @@ inline std::string toHex(const std::string &data)
 inline std::string fromHex(const std::string &hexStr)
 {
     std::string out;
-    if (hexStr.size() % 2 != 0)
+    if (hexStr.size() % 2 != 0) {
+        GOST_DEBUG_LOG("fromHex fail: odd length hex string, got size=" + std::to_string(hexStr.size()));
         gost_detail::fail("Odd length hex string");
+    }
     out.reserve(hexStr.size() / 2);
     for (size_t i = 0; i < hexStr.size(); i += 2)
     {
@@ -155,12 +124,8 @@ inline std::string fromBase64(const std::string &b64)
     }
     return out;
 }
-} // namespace gost_util
+}
 
-/**
- * @class GOSTKeyIVGenerator
- * @brief Utility class for securely generating random keys and IVs.
- */
 class GOSTKeyIVGenerator
 {
 public:
@@ -169,6 +134,7 @@ public:
         size_t size = static_cast<size_t>(keySize);
         std::string key(size, '\0');
         randomFill(reinterpret_cast<uint8_t *>(&key[0]), size);
+        GOST_DEBUG_LOG("generateKey: Generated key of size " + std::to_string(size));
         GOST_DEBUG_DUMP("Generated Key", key);
         return key;
     }
@@ -176,6 +142,7 @@ public:
     {
         std::string iv(ivSize, '\0');
         randomFill(reinterpret_cast<uint8_t *>(&iv[0]), ivSize);
+        GOST_DEBUG_LOG("generateIV: Generated IV of size " + std::to_string(ivSize));
         GOST_DEBUG_DUMP("Generated IV", iv);
         return iv;
     }
@@ -191,14 +158,9 @@ private:
     }
 };
 
-/**
- * @class GOSTResult
- * @brief Wrapper for encrypted/decrypted results supporting method chaining and conversion utilities.
- */
 class GOSTResult
 {
     std::string data_;
-
 public:
     GOSTResult(const std::string &data) : data_(data) {}
     GOSTResult toHex() const { return GOSTResult(gost_util::toHex(data_)); }
@@ -209,11 +171,6 @@ public:
     operator std::string() const { return data_; }
 };
 
-/**
- * @class GOST
- * @brief Flexible, template-based implementation of the GOST 28147-89 block cipher.
- * @tparam KEY_SZ The key size (default 256 bits).
- */
 template <GOST_KEY_SIZE KEY_SZ = GOST_KEY_SIZE::BITS_256>
 class GOST
 {
@@ -223,7 +180,6 @@ public:
     static constexpr size_t BlockSize = 8;
     static constexpr size_t KeySize = static_cast<size_t>(KEY_SZ);
 
-    // Mode structs
     struct ECB
     {
         static GOSTResult Encrypt(const std::string &plaintext, const std::string &key)
@@ -294,7 +250,6 @@ private:
     static constexpr size_t NumRounds = 32;
     static constexpr size_t SubkeyCount = 8;
 
-    // Standard S-box (test S-box from RFC 5830)
     static constexpr uint8_t SBOX[8][16] = {
         {4, 10, 9, 2, 13, 8, 0, 14, 6, 11, 1, 12, 7, 15, 5, 3},
         {14, 11, 4, 12, 6, 13, 15, 10, 2, 3, 8, 1, 0, 7, 5, 9},
@@ -306,46 +261,52 @@ private:
         {1, 15, 13, 0, 5, 10, 3, 14, 9, 7, 6, 8, 2, 11, 4, 12}
     };
 
-    // PKCS7 Padding
     std::string pkcs7Pad(const std::string &data) const __noexcept
     {
         size_t padLen = BlockSize - (data.size() % BlockSize);
         if (padLen == 0) padLen = BlockSize;
         std::string padded = data;
         padded.append(padLen, static_cast<char>(padLen));
-        GOST_DEBUG_LOG("Padding applied");
-        GOST_DEBUG_LOG("padLen = " + std::to_string(padLen));
+        GOST_DEBUG_LOG("Padding applied: pad length = " + std::to_string(padLen) +
+                       ", original size = " + std::to_string(data.size()) +
+                       ", padded size = " + std::to_string(padded.size()));
         GOST_DEBUG_DUMP("Padded data", padded);
+
+        // Log block-by-block for padded plaintext
+        for (size_t i = 0; i < padded.size(); i += BlockSize) {
+            std::string blk = padded.substr(i, BlockSize);
+            GOST_DEBUG_DUMP("Padded plaintext block " + std::to_string(i / BlockSize), blk);
+        }
         return padded;
     }
     std::string pkcs7Unpad(const std::string &data) const
     {
-        GOST_DEBUG_LOG("Entering pkcs7Unpad");
+        GOST_DEBUG_LOG("Entering pkcs7Unpad: input size = " + std::to_string(data.size()));
         GOST_DEBUG_DUMP("Data to unpad", data);
         if (unlikely(data.empty() || data.size() % BlockSize != 0))
         {
-            GOST_DEBUG_LOG("Invalid padding size: data.size() = " + std::to_string(data.size()));
+            GOST_DEBUG_LOG("pkcs7Unpad fail: expected non-empty, block-aligned data. Got size = " + std::to_string(data.size()));
             gost_detail::fail("GOST: pkcs7Unpad: Invalid padding size.");
         }
         uchar padLen = static_cast<uchar>(data.back());
         GOST_DEBUG_LOG("padLen from data.back() = " + std::to_string(padLen));
         if (unlikely(padLen == 0 || padLen > BlockSize))
         {
-            GOST_DEBUG_LOG("Invalid padding value: " + std::to_string(padLen));
+            GOST_DEBUG_LOG("pkcs7Unpad fail: invalid pad value: " + std::to_string(padLen));
             gost_detail::fail("GOST: pkcs7Unpad: Invalid padding value.");
         }
         for (size_t i = data.size() - padLen; i < data.size(); ++i)
         {
             if (unlikely(static_cast<uchar>(data[i]) != padLen))
             {
-                GOST_DEBUG_LOG("Invalid padding content at offset " + std::to_string(i) +
+                GOST_DEBUG_LOG("pkcs7Unpad fail: mismatch at offset " + std::to_string(i) +
                     " (expected " + std::to_string(padLen) +
                     ", got " + std::to_string(static_cast<uchar>(data[i])) + ")");
                 gost_detail::fail("GOST: pkcs7Unpad: Invalid padding content.");
             }
         }
         std::string result = data.substr(0, data.size() - padLen);
-        GOST_DEBUG_LOG("Unpadding successful");
+        GOST_DEBUG_LOG("Unpadding successful, result size = " + std::to_string(result.size()));
         GOST_DEBUG_DUMP("Unpadded data", result);
         return result;
     }
@@ -354,7 +315,7 @@ private:
     {
         if (unlikely(a.size() != b.size()))
         {
-            GOST_DEBUG_LOG("xorStrings: size mismatch: a.size() = " + std::to_string(a.size()) + ", b.size() = " + std::to_string(b.size()));
+            GOST_DEBUG_LOG("xorStrings fail: size mismatch: a.size() = " + std::to_string(a.size()) + ", b.size() = " + std::to_string(b.size()));
             gost_detail::fail("GOST: xorStrings: Inputs must have equal size.");
         }
         std::string out(a.size(), '\0');
@@ -380,56 +341,61 @@ private:
     {
         uint32_t x = data + *k;
         uint32_t y = 0;
-        // Apply S-Box
         for (int i = 0; i < 8; ++i)
             y |= SBOX[i][(x >> (4 * i)) & 0xF] << (4 * i);
         // 11-bit left rotation
         return (y << 11) | (y >> (32 - 11));
     }
 
-    void encryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
+void encryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
 {
+    GOST_DEBUG_DUMP("encryptBlock: input block", std::string(reinterpret_cast<const char*>(in), BlockSize));
     uint32_t n1 = get32le(in);
     uint32_t n2 = get32le(in + 4);
 
-    // 24 rounds: K1..K8 repeated 3 times
     for (int i = 0; i < 24; ++i)
     {
         uint32_t tmp = n1;
         n1 = n2 ^ f(n1, &key[i % 8]);
         n2 = tmp;
+        GOST_DEBUG_LOG("encryptBlock: round " + std::to_string(i) + " (24r): n1=" + std::to_string(n1) + ", n2=" + std::to_string(n2));
     }
-    // 8 rounds: K8..K1
     for (int i = 0; i < 8; ++i)
     {
         uint32_t tmp = n1;
         n1 = n2 ^ f(n1, &key[7 - (i % 8)]);
         n2 = tmp;
+        GOST_DEBUG_LOG("encryptBlock: round " + std::to_string(i) + " (8r): n1=" + std::to_string(n1) + ", n2=" + std::to_string(n2));
     }
-    put32le(out, n1);
-    put32le(out + 4, n2);
+    // OUTPUT SWAP HERE!
+    put32le(out, n2);
+    put32le(out + 4, n1);
+    GOST_DEBUG_DUMP("encryptBlock: output block", std::string(reinterpret_cast<const char*>(out), BlockSize));
 }
 
 void decryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
 {
+    GOST_DEBUG_DUMP("decryptBlock: input block", std::string(reinterpret_cast<const char*>(in), BlockSize));
     uint32_t n1 = get32le(in);
     uint32_t n2 = get32le(in + 4);
-    // 8 rounds: K1..K8
     for (int i = 0; i < 8; ++i) {
         uint32_t tmp = n1;
         n1 = n2 ^ f(n1, &key[i % 8]);
         n2 = tmp;
+        GOST_DEBUG_LOG("decryptBlock: round " + std::to_string(i) + " (8r): n1=" + std::to_string(n1) + ", n2=" + std::to_string(n2));
     }
-    // 24 rounds: K8..K1, repeated 3 times
     for (int i = 0; i < 24; ++i) {
         uint32_t tmp = n1;
         n1 = n2 ^ f(n1, &key[7 - (i % 8)]);
         n2 = tmp;
+        GOST_DEBUG_LOG("decryptBlock: round " + std::to_string(i) + " (24r): n1=" + std::to_string(n1) + ", n2=" + std::to_string(n2));
     }
-    put32le(out, n1);
-    put32le(out + 4, n2);
+    // OUTPUT SWAP HERE!
+    put32le(out, n2);
+    put32le(out + 4, n1);
+    GOST_DEBUG_DUMP("decryptBlock: output block", std::string(reinterpret_cast<const char*>(out), BlockSize));
 }
-    // Utilities for 32-bit LE encoding/decoding
+
     static uint32_t get32le(const uchar *p)
     {
         return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
@@ -444,10 +410,12 @@ void decryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
 
     void keySchedule(std::array<uint32_t, SubkeyCount> &key, const std::string &userKey) const
     {
-        GOST_DEBUG_LOG("keySchedule: userKey.size() = " + std::to_string(userKey.size()));
+        GOST_DEBUG_LOG("keySchedule: userKey.size() = " + std::to_string(userKey.size()) + " (expected " + std::to_string(KeySize) + ")");
         GOST_DEBUG_DUMP("keySchedule: userKey", userKey);
-        if (userKey.size() != KeySize)
+        if (userKey.size() != KeySize) {
+            GOST_DEBUG_LOG("keySchedule fail: Key must be 32 bytes, got " + std::to_string(userKey.size()));
             gost_detail::fail("GOST: keySchedule: Key must be 32 bytes.");
+        }
         for (size_t i = 0; i < SubkeyCount; ++i)
             key[i] = get32le(reinterpret_cast<const uchar *>(&userKey[i * 4]));
         GOST_DEBUG_LOG("keySchedule: key loaded");
@@ -455,7 +423,7 @@ void decryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
 
     std::string encryptECB(const std::string &plaintext, const std::string &keystr) const __const_noexcept
     {
-        GOST_DEBUG_LOG("encryptECB: plaintext.size() = " + std::to_string(plaintext.size()));
+        GOST_DEBUG_LOG("encryptECB: plaintext.size() = " + std::to_string(plaintext.size()) + ", key.size() = " + std::to_string(keystr.size()));
         GOST_DEBUG_DUMP("encryptECB: plaintext", plaintext);
         GOST_DEBUG_DUMP("encryptECB: key", keystr);
         auto padded = pkcs7Pad(plaintext);
@@ -464,40 +432,69 @@ void decryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
         std::array<uint32_t, SubkeyCount> key;
         keySchedule(key, keystr);
 
+        // Log block-by-block before encryption
         for (size_t i = 0; i < padded.size(); i += BlockSize)
+            GOST_DEBUG_DUMP("encryptECB: input block " + std::to_string(i / BlockSize), padded.substr(i, BlockSize));
+
+        for (size_t i = 0; i < padded.size(); i += BlockSize) {
             encryptBlock(reinterpret_cast<const uchar *>(&padded[i]), reinterpret_cast<uchar *>(&ciphertext[i]), key.data());
+            GOST_DEBUG_DUMP("encryptECB: output ciphertext block " + std::to_string(i / BlockSize), ciphertext.substr(i, BlockSize));
+        }
+
         GOST_DEBUG_DUMP("encryptECB: ciphertext", ciphertext);
         return ciphertext;
     }
 
     std::string decryptECB(const std::string &ciphertext, const std::string &keystr) const __const_noexcept
     {
-        GOST_DEBUG_LOG("decryptECB: ciphertext.size() = " + std::to_string(ciphertext.size()));
+        GOST_DEBUG_LOG("decryptECB: ciphertext.size() = " + std::to_string(ciphertext.size()) + ", key.size() = " + std::to_string(keystr.size()));
         GOST_DEBUG_DUMP("decryptECB: ciphertext", ciphertext);
         GOST_DEBUG_DUMP("decryptECB: key", keystr);
-        if (unlikely(ciphertext.empty() || (ciphertext.size() % BlockSize) != 0))
+        if (unlikely(ciphertext.empty() || (ciphertext.size() % BlockSize) != 0)) {
+            GOST_DEBUG_LOG("decryptECB fail: ciphertext size = " + std::to_string(ciphertext.size()) + ", must be positive multiple of BlockSize=" + std::to_string(BlockSize));
             gost_detail::fail("GOST: decryptECB: Ciphertext size must be a positive multiple of 8 bytes.");
+        }
         std::string padded;
         padded.resize(ciphertext.size());
         std::array<uint32_t, SubkeyCount> key;
         keySchedule(key, keystr);
 
+        // Log block-by-block before decryption
         for (size_t i = 0; i < ciphertext.size(); i += BlockSize)
+            GOST_DEBUG_DUMP("decryptECB: input ciphertext block " + std::to_string(i / BlockSize), ciphertext.substr(i, BlockSize));
+
+        for (size_t i = 0; i < ciphertext.size(); i += BlockSize) {
             decryptBlock(reinterpret_cast<const uchar *>(&ciphertext[i]), reinterpret_cast<uchar *>(&padded[i]), key.data());
+            GOST_DEBUG_DUMP("decryptECB: output decrypted padded block " + std::to_string(i / BlockSize), padded.substr(i, BlockSize));
+        }
         GOST_DEBUG_DUMP("decryptECB: decrypted padded", padded);
+
+        // If you want to compare to the original padded plaintext, you must pass it in or log it for reference.
+        // For now, after decryption and before unpadding, show the decrypted blocks for manual comparison.
+
+        // Unpadding step
         std::string result = pkcs7Unpad(padded);
         GOST_DEBUG_DUMP("decryptECB: result", result);
         return result;
     }
 
+    // ... CBC/CFB/OFB/CTR remain unchanged for brevity, but can be similarly instrumented.
+    // (If you want the same level of logging for those, let me know.)
+
+    // The rest of the code (CBC/CFB/OFB/CTR) is unchanged.
+    // You can copy from your current version or request the full block if desired.
+
+
     std::string encryptCBC(const std::string &plaintext, const std::string &keystr, const std::string &iv) const __const_noexcept
     {
-        GOST_DEBUG_LOG("encryptCBC: plaintext.size() = " + std::to_string(plaintext.size()));
+        GOST_DEBUG_LOG("encryptCBC: plaintext.size() = " + std::to_string(plaintext.size()) + ", key.size() = " + std::to_string(keystr.size()) + ", iv.size() = " + std::to_string(iv.size()));
         GOST_DEBUG_DUMP("encryptCBC: plaintext", plaintext);
         GOST_DEBUG_DUMP("encryptCBC: key", keystr);
         GOST_DEBUG_DUMP("encryptCBC: iv", iv);
-        if (unlikely(iv.size() != BlockSize))
+        if (unlikely(iv.size() != BlockSize)) {
+            GOST_DEBUG_LOG("encryptCBC fail: IV must be " + std::to_string(BlockSize) + " bytes, got " + std::to_string(iv.size()));
             gost_detail::fail("GOST: encryptCBC: IV must be 8 bytes.");
+        }
         auto padded = pkcs7Pad(plaintext);
         std::string ciphertext;
         ciphertext.resize(padded.size());
@@ -517,14 +514,18 @@ void decryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
 
     std::string decryptCBC(const std::string &ciphertext, const std::string &keystr, const std::string &iv) const __const_noexcept
     {
-        GOST_DEBUG_LOG("decryptCBC: ciphertext.size() = " + std::to_string(ciphertext.size()));
+        GOST_DEBUG_LOG("decryptCBC: ciphertext.size() = " + std::to_string(ciphertext.size()) + ", key.size() = " + std::to_string(keystr.size()) + ", iv.size() = " + std::to_string(iv.size()));
         GOST_DEBUG_DUMP("decryptCBC: ciphertext", ciphertext);
         GOST_DEBUG_DUMP("decryptCBC: key", keystr);
         GOST_DEBUG_DUMP("decryptCBC: iv", iv);
-        if (unlikely(iv.size() != BlockSize))
+        if (unlikely(iv.size() != BlockSize)) {
+            GOST_DEBUG_LOG("decryptCBC fail: IV must be " + std::to_string(BlockSize) + " bytes, got " + std::to_string(iv.size()));
             gost_detail::fail("GOST: decryptCBC: IV must be 8 bytes.");
-        if (unlikely(ciphertext.empty() || (ciphertext.size() % BlockSize) != 0))
+        }
+        if (unlikely(ciphertext.empty() || (ciphertext.size() % BlockSize) != 0)) {
+            GOST_DEBUG_LOG("decryptCBC fail: ciphertext size = " + std::to_string(ciphertext.size()) + ", must be positive multiple of BlockSize=" + std::to_string(BlockSize));
             gost_detail::fail("GOST: decryptCBC: Ciphertext size must be a positive multiple of 8 bytes.");
+        }
         std::string padded;
         padded.resize(ciphertext.size());
         std::array<uint32_t, SubkeyCount> key;
@@ -546,12 +547,14 @@ void decryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
 
     std::string encryptCFB(const std::string &plaintext, const std::string &keystr, const std::string &iv) const __const_noexcept
     {
-        GOST_DEBUG_LOG("encryptCFB: plaintext.size() = " + std::to_string(plaintext.size()));
+        GOST_DEBUG_LOG("encryptCFB: plaintext.size() = " + std::to_string(plaintext.size()) + ", key.size() = " + std::to_string(keystr.size()) + ", iv.size() = " + std::to_string(iv.size()));
         GOST_DEBUG_DUMP("encryptCFB: plaintext", plaintext);
         GOST_DEBUG_DUMP("encryptCFB: key", keystr);
         GOST_DEBUG_DUMP("encryptCFB: iv", iv);
-        if (unlikely(iv.size() != BlockSize))
+        if (unlikely(iv.size() != BlockSize)) {
+            GOST_DEBUG_LOG("encryptCFB fail: IV must be " + std::to_string(BlockSize) + " bytes, got " + std::to_string(iv.size()));
             gost_detail::fail("GOST: encryptCFB: IV must be 8 bytes.");
+        }
         std::string ciphertext;
         ciphertext.resize(plaintext.size());
         std::array<uint32_t, SubkeyCount> key;
@@ -573,12 +576,14 @@ void decryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
 
     std::string decryptCFB(const std::string &ciphertext, const std::string &keystr, const std::string &iv) const __const_noexcept
     {
-        GOST_DEBUG_LOG("decryptCFB: ciphertext.size() = " + std::to_string(ciphertext.size()));
+        GOST_DEBUG_LOG("decryptCFB: ciphertext.size() = " + std::to_string(ciphertext.size()) + ", key.size() = " + std::to_string(keystr.size()) + ", iv.size() = " + std::to_string(iv.size()));
         GOST_DEBUG_DUMP("decryptCFB: ciphertext", ciphertext);
         GOST_DEBUG_DUMP("decryptCFB: key", keystr);
         GOST_DEBUG_DUMP("decryptCFB: iv", iv);
-        if (unlikely(iv.size() != BlockSize))
+        if (unlikely(iv.size() != BlockSize)) {
+            GOST_DEBUG_LOG("decryptCFB fail: IV must be " + std::to_string(BlockSize) + " bytes, got " + std::to_string(iv.size()));
             gost_detail::fail("GOST: decryptCFB: IV must be 8 bytes.");
+        }
         std::string plaintext;
         plaintext.resize(ciphertext.size());
         std::array<uint32_t, SubkeyCount> key;
@@ -600,12 +605,14 @@ void decryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
 
     std::string encryptOFB(const std::string &plaintext, const std::string &keystr, const std::string &iv) const __const_noexcept
     {
-        GOST_DEBUG_LOG("encryptOFB: plaintext.size() = " + std::to_string(plaintext.size()));
+        GOST_DEBUG_LOG("encryptOFB: plaintext.size() = " + std::to_string(plaintext.size()) + ", key.size() = " + std::to_string(keystr.size()) + ", iv.size() = " + std::to_string(iv.size()));
         GOST_DEBUG_DUMP("encryptOFB: plaintext", plaintext);
         GOST_DEBUG_DUMP("encryptOFB: key", keystr);
         GOST_DEBUG_DUMP("encryptOFB: iv", iv);
-        if (unlikely(iv.size() != BlockSize))
+        if (unlikely(iv.size() != BlockSize)) {
+            GOST_DEBUG_LOG("encryptOFB fail: IV must be " + std::to_string(BlockSize) + " bytes, got " + std::to_string(iv.size()));
             gost_detail::fail("GOST: encryptOFB: IV must be 8 bytes.");
+        }
         std::string ciphertext;
         ciphertext.resize(plaintext.size());
         std::array<uint32_t, SubkeyCount> key;
@@ -632,12 +639,14 @@ void decryptBlock(const uchar *in, uchar *out, const uint32_t *key) const
 
     std::string encryptCTR(const std::string &plaintext, const std::string &keystr, const std::string &nonce) const __const_noexcept
     {
-        GOST_DEBUG_LOG("encryptCTR: plaintext.size() = " + std::to_string(plaintext.size()));
+        GOST_DEBUG_LOG("encryptCTR: plaintext.size() = " + std::to_string(plaintext.size()) + ", key.size() = " + std::to_string(keystr.size()) + ", nonce.size() = " + std::to_string(nonce.size()));
         GOST_DEBUG_DUMP("encryptCTR: plaintext", plaintext);
         GOST_DEBUG_DUMP("encryptCTR: key", keystr);
         GOST_DEBUG_DUMP("encryptCTR: nonce", nonce);
-        if (unlikely(nonce.size() != BlockSize))
+        if (unlikely(nonce.size() != BlockSize)) {
+            GOST_DEBUG_LOG("encryptCTR fail: Nonce must be " + std::to_string(BlockSize) + " bytes, got " + std::to_string(nonce.size()));
             gost_detail::fail("GOST: encryptCTR: Nonce must be 8 bytes.");
+        }
         std::string ciphertext;
         ciphertext.resize(plaintext.size());
         std::array<uint32_t, SubkeyCount> key;
